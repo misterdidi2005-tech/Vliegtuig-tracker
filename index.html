@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="nl">
 <head>
@@ -112,7 +113,7 @@
     const RADIUS_NM = 35;   // Straal in zeemijlen (~65 km)
     // ===============================================
 
-    let currentCallsign = "";
+    let lastKnownFlight = "";
 
     function getDistanceKm(lat1, lon1, lat2, lon2) {
       const R = 6371;
@@ -124,46 +125,63 @@
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-    async function loadRoute(cs) {
-      if (!cs || cs === currentCallsign) return;
-      currentCallsign = cs;
-      document.getElementById('route').innerText = "Zoeken...";
+    // JSONP laadfunctie: kan door mobiele browsers NOOIT geblokkeerd worden via CORS
+    function jsonp(url) {
+      return new Promise((resolve, reject) => {
+        const callbackName = 'adsb_cb_' + Math.round(100000 * Math.random());
+        window[callbackName] = function(data) {
+          delete window[callbackName];
+          document.body.removeChild(script);
+          resolve(data);
+        };
 
+        const script = document.createElement('script');
+        script.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + callbackName;
+        script.onerror = function() {
+          delete window[callbackName];
+          document.body.removeChild(script);
+          reject(new Error("Netwerkfout"));
+        };
+        document.body.appendChild(script);
+      });
+    }
+
+    async function checkRoute(flightNumber) {
+      if (!flightNumber || flightNumber === lastKnownFlight) return;
+      lastKnownFlight = flightNumber;
+      
       try {
-        const res = await fetch(`https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent('https://api.adsbdb.com/v0/callsign/' + cs)}`);
-        const json = await res.json();
-        const r = json.response?.flightroute;
+        const target = `https://api.adsbdb.com/v0/callsign/${flightNumber}`;
+        const data = await jsonp(`https://jsonp.afeld.me/?url=${encodeURIComponent(target)}`);
+        const r = data.response?.flightroute;
         if (r && r.origin && r.destination) {
-          const from = r.origin.iata_code || r.origin.icao_code || r.origin.name;
-          const to = r.destination.iata_code || r.destination.icao_code || r.destination.name;
-          document.getElementById('route').innerText = `${from} ➔ ${to}`;
+          const orig = r.origin.iata_code || r.origin.icao_code || r.origin.name;
+          const dest = r.destination.iata_code || r.destination.icao_code || r.destination.name;
+          document.getElementById('route').innerText = `${orig} ➔ ${dest}`;
           return;
         }
       } catch (e) {}
-
       document.getElementById('route').innerText = "Niet beschikbaar";
     }
 
     async function updateNearestFlight() {
-      // Gebruik codetabs proxy zodat browsers geen 'Failed to fetch' meer geven
-      const target = `https://api.airplanes.live/v2/point/${MY_LAT}/${MY_LON}/${RADIUS_NM}`;
-      const proxy = `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(target)}`;
+      // Ophalen via JSONP gateway (geen CORS blokkade)
+      const targetApi = `https://api.airplanes.live/v2/point/${MY_LAT}/${MY_LON}/${RADIUS_NM}`;
+      const jsonpUrl = `https://jsonp.afeld.me/?url=${encodeURIComponent(targetApi)}`;
 
       try {
-        const res = await fetch(proxy);
-        if (!res.ok) throw new Error("Status " + res.status);
-        const data = await res.json();
+        const data = await jsonp(jsonpUrl);
         const aircraft = data.ac || [];
 
         if (aircraft.length === 0) {
           document.getElementById('callsign').innerText = "Geen verkeer";
-          document.getElementById('distance').innerText = `Geen vliegtuigen binnen ${RADIUS_NM} NM`;
+          document.getElementById('distance').innerText = `Geen verkeer binnen ${RADIUS_NM} NM`;
           document.getElementById('type').innerText = "-";
           document.getElementById('altitude').innerText = "-";
           document.getElementById('speed').innerText = "-";
           document.getElementById('reg').innerText = "-";
           document.getElementById('route').innerText = "-";
-          document.getElementById('status').innerText = `Scan actief • ${new Date().toLocaleTimeString()}`;
+          document.getElementById('status').innerText = `Actief aan het scannen • ${new Date().toLocaleTimeString()}`;
           return;
         }
 
@@ -181,11 +199,12 @@
         });
 
         if (nearest) {
-          const cs = (nearest.flight || nearest.r || "").trim();
-          document.getElementById('callsign').innerText = cs || "Onbekend";
+          const callsign = (nearest.flight || nearest.r || "Vlucht").trim();
+          document.getElementById('callsign').innerText = callsign;
           document.getElementById('distance').innerText = `${minDistance.toFixed(1)} km van je vandaan`;
           document.getElementById('type').innerText = nearest.t || "Onbekend";
 
+          // Hoogte
           const altFt = nearest.alt_baro === "ground" ? 0 : nearest.alt_baro;
           if (altFt !== undefined && altFt !== null) {
             const altM = Math.round(altFt * 0.3048);
@@ -194,6 +213,7 @@
             document.getElementById('altitude').innerText = "-";
           }
 
+          // Snelheid
           if (nearest.gs) {
             const kmh = Math.round(nearest.gs * 1.852);
             document.getElementById('speed').innerText = `${kmh} km/u`;
@@ -203,16 +223,13 @@
 
           document.getElementById('reg').innerText = nearest.r || "-";
 
-          if (cs) {
-            loadRoute(cs);
-          } else {
-            document.getElementById('route').innerText = "-";
-          }
+          // Route ophalen
+          checkRoute(callsign);
         }
 
         document.getElementById('status').innerText = `Live verbonden • ${new Date().toLocaleTimeString()}`;
       } catch (err) {
-        document.getElementById('status').innerText = `Verbinding herstellen... (${err.message})`;
+        document.getElementById('status').innerText = `Scannen... (${new Date().toLocaleTimeString()})`;
       }
     }
 
