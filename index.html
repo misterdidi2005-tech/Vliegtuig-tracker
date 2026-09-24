@@ -19,19 +19,19 @@
       justify-content: center;
       align-items: center;
       min-height: 100vh;
-      padding: 2rem;
+      padding: 1.5rem;
     }
     .card {
       background: #1e293b;
       border: 1px solid #334155;
       border-radius: 1.5rem;
-      padding: 3rem;
-      max-width: 600px;
+      padding: 2.5rem;
+      max-width: 550px;
       width: 100%;
       box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
     }
     .callsign {
-      font-size: 3rem;
+      font-size: 2.8rem;
       font-weight: 800;
       letter-spacing: 0.05em;
       color: #38bdf8;
@@ -40,32 +40,32 @@
     .distance {
       font-size: 1.1rem;
       color: #94a3b8;
-      margin-bottom: 2rem;
+      margin-bottom: 1.8rem;
     }
     .grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 1.5rem;
+      gap: 1.25rem;
     }
     .item {
       display: flex;
       flex-direction: column;
     }
     .label {
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: #64748b;
       margin-bottom: 0.25rem;
     }
     .value {
-      font-size: 1.5rem;
+      font-size: 1.35rem;
       font-weight: 600;
     }
     .status {
       margin-top: 1.5rem;
       font-size: 0.8rem;
-      color: #475569;
+      color: #64748b;
       text-align: center;
     }
   </style>
@@ -90,24 +90,22 @@
         <span id="speed" class="value">-</span>
       </div>
       <div class="item">
-        <span class="label">Route</span>
-        <span id="route" class="value">-</span>
+        <span class="label">Registratie</span>
+        <span id="reg" class="value">-</span>
       </div>
     </div>
 
-    <div id="status" class="status">Laatste update: -</div>
+    <div id="status" class="status">Initialiseren...</div>
   </div>
 
   <script>
     // ================= CONFIGURATIE =================
-    // Pas hieronder je eigen GPS-coördinaten aan:
-    const MY_LAT = 51.206;  // Breedtegraad
-    const MY_LON = 4.041;   // Lengtegraad
-    const RADIUS_NM = 25;   // Zoekstraal in Zeemijlen (~46 km)
-    const REFRESH_SEC = 5;  // Update elke X seconden
+    const MY_LAT = 51.206;  // Jouw breedtegraad
+    const MY_LON = 4.041;   // Jouw lengtegraad
+    const RADIUS_NM = 30;   // Straal in zeemijlen (~55 km)
+    const REFRESH_SEC = 5;  // Verversen elke 5 seconden
     // ===============================================
 
-    // Haversine-formule om afstand in kilometers te berekenen
     function getDistanceKm(lat1, lon1, lat2, lon2) {
       const R = 6371;
       const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -118,25 +116,42 @@
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-    async function updateNearestFlight() {
-      const url = `https://api.adsb.lol/v2/lat/${MY_LAT}/lon/${MY_LON}/dist/${RADIUS_NM}`;
+    async function fetchFromApi() {
+      // Probeert eerst airplanes.live, valt bij problemen terug op adsb.lol
+      const endpoints = [
+        `https://api.airplanes.live/v2/point/${MY_LAT}/${MY_LON}/${RADIUS_NM}`,
+        `https://api.adsb.lol/v2/point/${MY_LAT}/${MY_LON}/${RADIUS_NM}`
+      ];
 
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url);
+          if (res.ok) {
+            return await res.json();
+          }
+        } catch (e) {
+          // Volgende proberen
+        }
+      }
+      throw new Error("Geen verbinding mogelijk");
+    }
+
+    async function updateNearestFlight() {
       try {
-        const res = await fetch(url);
-        const data = await res.json();
+        const data = await fetchFromApi();
         const aircraft = data.ac || [];
 
         if (aircraft.length === 0) {
           document.getElementById('callsign').innerText = "Geen verkeer";
-          document.getElementById('distance').innerText = `Geen toestellen binnen ${RADIUS_NM} NM`;
+          document.getElementById('distance').innerText = `Geen vliegtuigen binnen ${RADIUS_NM} NM`;
           document.getElementById('type').innerText = "-";
           document.getElementById('altitude').innerText = "-";
           document.getElementById('speed').innerText = "-";
-          document.getElementById('route').innerText = "-";
+          document.getElementById('reg').innerText = "-";
+          document.getElementById('status').innerText = `Laatste scan: ${new Date().toLocaleTimeString()}`;
           return;
         }
 
-        // Bereken afstand voor elk toestel met geldige GPS-positie
         let nearest = null;
         let minDistance = Infinity;
 
@@ -151,11 +166,10 @@
         });
 
         if (nearest) {
-          document.getElementById('callsign').innerText = (nearest.flight || nearest.r || "Onbekend").trim();
+          document.getElementById('callsign').innerText = (nearest.flight || nearest.r || "Vlucht").trim();
           document.getElementById('distance').innerText = `${minDistance.toFixed(1)} km van je vandaan`;
           document.getElementById('type').innerText = nearest.t || "Onbekend";
           
-          // Hoogte (voet omrekenen naar meters / tonen in ft en m)
           const altFt = nearest.alt_baro === "ground" ? 0 : nearest.alt_baro;
           if (altFt !== undefined) {
             const altM = Math.round(altFt * 0.3048);
@@ -164,7 +178,6 @@
             document.getElementById('altitude').innerText = "Onbekend";
           }
 
-          // Grondsnelheid (knopen naar km/h)
           if (nearest.gs) {
             const kmh = Math.round(nearest.gs * 1.852);
             document.getElementById('speed').innerText = `${kmh} km/u`;
@@ -172,20 +185,15 @@
             document.getElementById('speed').innerText = "Onbekend";
           }
 
-          // Vertrek en bestemming
-          // ADS-B bevat standaard radiogegevens; route vereist externe lookup
-          const origin = nearest.orig || "---";
-          const dest = nearest.dest || "---";
-          document.getElementById('route').innerText = (origin !== "---" || dest !== "---") ? `${origin} → ${dest}` : "Niet openbaar";
+          document.getElementById('reg').innerText = nearest.r || "-";
         }
 
-        document.getElementById('status').innerText = `Laatste update: ${new Date().toLocaleTimeString()}`;
+        document.getElementById('status').innerText = `Live verbonden • ${new Date().toLocaleTimeString()}`;
       } catch (err) {
-        document.getElementById('status').innerText = "Fout bij ophalen van data (verbinding controleren).";
+        document.getElementById('status').innerText = "Gegevens laden...";
       }
     }
 
-    // Direct uitvoeren en herhalen met ingestelde interval
     updateNearestFlight();
     setInterval(updateNearestFlight, REFRESH_SEC * 1000);
   </script>
