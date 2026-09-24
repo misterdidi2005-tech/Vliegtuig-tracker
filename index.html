@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="nl">
 <head>
@@ -25,7 +26,7 @@
       background: #1e293b;
       border: 1px solid #334155;
       border-radius: 1.5rem;
-      padding: 2.5rem;
+      padding: 2.25rem;
       max-width: 520px;
       width: 100%;
       box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
@@ -50,6 +51,9 @@
     .item {
       display: flex;
       flex-direction: column;
+    }
+    .item.full-width {
+      grid-column: span 2;
     }
     .label {
       font-size: 0.8rem;
@@ -93,17 +97,23 @@
         <span class="label">Registratie</span>
         <span id="reg" class="value">-</span>
       </div>
+      <div class="item full-width">
+        <span class="label">Vertrek & Bestemming</span>
+        <span id="route" class="value">-</span>
+      </div>
     </div>
 
-    <div id="status" class="status">Verbinden...</div>
+    <div id="status" class="status">Verbinding maken...</div>
   </div>
 
   <script>
     // ================= CONFIGURATIE =================
     const MY_LAT = 51.206;  // Jouw breedtegraad
     const MY_LON = 4.041;   // Jouw lengtegraad
-    const RADIUS_NM = 35;   // Straal in zeemijlen (~65 km)
+    const RADIUS_NM = 35;   // Straal in NM (~65 km)
     // ===============================================
+
+    let lastCallsign = "";
 
     function getDistanceKm(lat1, lon1, lat2, lon2) {
       const R = 6371;
@@ -115,24 +125,49 @@
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
+    async function fetchRoute(callsign) {
+      if (!callsign || callsign === "Vlucht" || callsign === lastCallsign) return;
+      lastCallsign = callsign;
+      
+      try {
+        const res = await fetch(`https://api.adsbdb.com/v0/callsign/${callsign}`);
+        if (res.ok) {
+          const data = await res.json();
+          const route = data.response?.flightroute;
+          if (route) {
+            const orig = route.origin?.iata_code || route.origin?.icao_code || "???";
+            const dest = route.destination?.iata_code || route.destination?.icao_code || "???";
+            document.getElementById('route').innerText = `${orig} ➔ ${dest}`;
+            return;
+          }
+        }
+      } catch (e) {}
+      document.getElementById('route').innerText = "Onbekend";
+    }
+
     async function updateNearestFlight() {
-      // Directe link via gratis proxy zodat browsers dit nooit weigeren
-      const targetApi = `https://api.airplanes.live/v2/point/${MY_LAT}/${MY_LON}/${RADIUS_NM}`;
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetApi)}`;
+      // Direct ophalen van airplanes.live
+      const directUrl = `https://api.airplanes.live/v2/point/${MY_LAT}/${MY_LON}/${RADIUS_NM}`;
 
       try {
-        const res = await fetch(proxyUrl);
-        if (!res.ok) throw new Error("Fout bij ophalen");
+        let res = await fetch(directUrl);
+        
+        // Mocht direct niet lukken, probeer via snelle fallback-proxy
+        if (!res.ok) {
+          res = await fetch(`https://corsproxy.io/?${encodeURIComponent(directUrl)}`);
+        }
+        
         const data = await res.json();
         const aircraft = data.ac || [];
 
         if (aircraft.length === 0) {
           document.getElementById('callsign').innerText = "Geen verkeer";
-          document.getElementById('distance').innerText = `Geen verkeer binnen ${RADIUS_NM} NM`;
+          document.getElementById('distance').innerText = `Geen toestellen binnen ${RADIUS_NM} NM`;
           document.getElementById('type').innerText = "-";
           document.getElementById('altitude').innerText = "-";
           document.getElementById('speed').innerText = "-";
           document.getElementById('reg').innerText = "-";
+          document.getElementById('route').innerText = "-";
           document.getElementById('status').innerText = `Laatste scan: ${new Date().toLocaleTimeString()}`;
           return;
         }
@@ -156,6 +191,7 @@
           document.getElementById('distance').innerText = `${minDistance.toFixed(1)} km van je vandaan`;
           document.getElementById('type').innerText = nearest.t || "Onbekend";
 
+          // Hoogte
           const altFt = nearest.alt_baro === "ground" ? 0 : nearest.alt_baro;
           if (altFt !== undefined && altFt !== null) {
             const altM = Math.round(altFt * 0.3048);
@@ -164,6 +200,7 @@
             document.getElementById('altitude').innerText = "-";
           }
 
+          // Snelheid
           if (nearest.gs) {
             const kmh = Math.round(nearest.gs * 1.852);
             document.getElementById('speed').innerText = `${kmh} km/u`;
@@ -172,19 +209,19 @@
           }
 
           document.getElementById('reg').innerText = nearest.r || "-";
+
+          // Route ophalen
+          fetchRoute(callsign);
         }
 
-        document.getElementById('status').innerText = `Live verbonden • ${new Date().toLocaleTimeString()}`;
+        document.getElementById('status').innerText = `Live verbinding • ${new Date().toLocaleTimeString()}`;
       } catch (err) {
-        document.getElementById('status').innerText = "Opnieuw proberen...";
+        document.getElementById('status').innerText = `Fout: ${err.message}`;
       }
     }
 
-    // Direct uitvoeren en herhalen elke 6 seconden
     updateNearestFlight();
-    setInterval(updateNearestFlight, 6000);
+    setInterval(updateNearestFlight, 5000);
   </script>
 </body>
 </html>
-
-
